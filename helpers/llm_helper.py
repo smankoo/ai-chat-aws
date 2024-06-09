@@ -3,7 +3,6 @@
 
 import boto3
 from botocore.exceptions import ClientError
-import time
 from pprint import pprint
 
 
@@ -20,35 +19,37 @@ class Conversation:
         return self.blocks
 
 
-def call_llm(conversation: Conversation):
+def call_llm(
+    conversation: Conversation, aws_access_key_id=None, aws_secret_access_key=None
+):
 
     # Create a Bedrock Runtime client in the AWS Region you want to use.
-    client = boto3.client("bedrock-runtime", region_name="us-east-1")
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name="us-east-1",
+        aws_access_key_id=aws_access_key_id,
+        aws_secret_access_key=aws_secret_access_key,
+    )
 
     # Set the model ID, e.g., Claude 3 Haiku.
     model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 
     conversation_blocks = conversation.get_blocks()
 
-    try:
-        # Send the message to the model, using a basic inference configuration.
-        streaming_response = client.converse_stream(
-            modelId=model_id,
-            messages=conversation_blocks,
-            inferenceConfig={"maxTokens": 512, "temperature": 0, "topP": 0.9},
-        )
+    # Send the message to the model, using a basic inference configuration.
+    streaming_response = client.converse_stream(
+        modelId=model_id,
+        messages=conversation_blocks,
+        inferenceConfig={"maxTokens": 512, "temperature": 0, "topP": 0.9},
+    )
 
-        # Extract and print the streamed response text in real-time.
-        for chunk in streaming_response["stream"]:
-            if "contentBlockDelta" in chunk:
-                text = chunk["contentBlockDelta"]["delta"]["text"]
-                # print(text, end="")
+    # Extract and print the streamed response text in real-time.
+    for chunk in streaming_response["stream"]:
+        if "contentBlockDelta" in chunk:
+            text = chunk["contentBlockDelta"]["delta"]["text"]
+            # print(text, end="")
 
-                yield (text)
-
-    except (ClientError, Exception) as e:
-        print(f"ERROR: Can't invoke '{model_id}'. Reason: {e}")
-        exit(1)
+            yield (text)
 
 
 if __name__ == "__main__":

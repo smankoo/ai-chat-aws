@@ -15,7 +15,11 @@ assistant_avatar = "✨"
 st.title("AI Chat AWS")
 
 with st.sidebar:
+    st.write("## AWS Credentials")
+    st.write("Required permissions: `bedrock:InvokeModelWithResponseStream`")
+    st.write("See [docs](https://docs.aws.amazon.com/bedrock/latest/userguide/security_iam_id-based-policy-examples.html)")
     aws_access_key_id = st.text_input("AWS Access Key ID", key="aws_access_key_id")
+
     aws_secret_access_key = st.text_input(
         "AWS Secret Access Key", key="aws_secret_access_key", type="password"
     )

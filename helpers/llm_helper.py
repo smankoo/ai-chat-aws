@@ -4,7 +4,7 @@
 import boto3
 from botocore.exceptions import ClientError
 from pprint import pprint
-
+import json
 
 class Conversation:
     def __init__(self, message=None):
@@ -19,9 +19,31 @@ class Conversation:
         return self.blocks
 
 
-def call_llm(
-    conversation: Conversation, aws_access_key_id=None, aws_secret_access_key=None
-):
+def call_llm(conversation: Conversation, aws_access_key_id=None, aws_secret_access_key=None):
+
+
+
+    tool_list = [
+        {
+            "toolSpec": {
+                "name": "cosine",
+                "description": "Calculate the cosine of x.",
+                "inputSchema": {
+                    "json": {
+                        "type": "object",
+                        "properties": {
+                            "x": {
+                                "type": "number",
+                                "description": "The number to pass to the function."
+                            }
+                        },
+                        "required": ["x"]
+                    }
+                }
+            }
+        }
+    ]
+
 
     # Create a Bedrock Runtime client in the AWS Region you want to use.
     client = boto3.client(
@@ -41,15 +63,52 @@ def call_llm(
         modelId=model_id,
         messages=conversation_blocks,
         inferenceConfig={"maxTokens": 512, "temperature": 0, "topP": 0.9},
+        toolConfig={
+            "tools": tool_list
+        },
+        system=[{"text":"If you need to do mathematical calculations, you must only do them by using a tool."}]
     )
 
+    message = {}
+    content = []
+    message['content'] = content
+    text = ''
+    tool_use = {}
     # Extract and print the streamed response text in real-time.
     for chunk in streaming_response["stream"]:
-        if "contentBlockDelta" in chunk:
-            text = chunk["contentBlockDelta"]["delta"]["text"]
-            # print(text, end="")
 
-            yield (text)
+        if 'messageStart' in chunk:
+            message['role'] = chunk['messageStart']['role']
+        elif 'contentBlockStart' in chunk:
+            tool = chunk['contentBlockStart']['start']['toolUse']
+            tool_use['toolUseId'] = tool['toolUseId']
+            tool_use['name'] = tool['name']
+        elif 'contentBlockDelta' in chunk:
+            delta = chunk['contentBlockDelta']['delta']
+            if 'toolUse' in delta:
+                if 'input' not in tool_use:
+                    tool_use['input'] = ''
+                tool_use['input'] += delta['toolUse']['input']
+            elif 'text' in delta:
+                text += delta['text']
+                print(delta['text'], end='')
+        elif 'contentBlockStop' in chunk:
+            if 'input' in tool_use:
+                tool_use['input'] = json.loads(tool_use['input'])
+                content.append({'toolUse': tool_use})
+                tool_use = {}
+            else:
+                content.append({'text': text})
+                text = ''
+
+        elif 'messageStop' in chunk:
+            stop_reason = chunk['messageStop']['stopReason']
+            
+        if "contentBlockDelta" in chunk:
+            if 'text' in chunk["contentBlockDelta"]["delta"]:
+                text = chunk["contentBlockDelta"]["delta"]["text"]
+                yield (text)
+                
 
 
 if __name__ == "__main__":

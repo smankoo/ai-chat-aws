@@ -31,6 +31,28 @@ tool_config = {
                         },
                         "required": ["sign"]
                     }
+                },
+                "name": "calc",
+                "description": "Perform a calculation.",
+                "inputSchema": {
+                    "json": {
+                        "type": "object",
+                        "properties": {
+                            "operator": {
+                                "type": "string",
+                                "description": "The operator to use for the calculation. Example operators are +, -, *, /, %, **."
+                            },
+                            "operand1": {
+                                "type": "number",
+                                "description": "The first operand for the calculation."
+                            },
+                            "operand2": {
+                                "type": "number",
+                                "description": "The second operand for the calculation."
+                            }
+                        },
+                        "required": ["operator", "operand1", "operand2"]
+                    }
                 }
             }
         }
@@ -43,6 +65,24 @@ def get_top_song(call_sign):
         return "Elemental Hotel", "8 Storey Hike"
     else:
         raise ValueError(f"Station {call_sign} not found.")
+
+# write a calc function that takes in an operator and two operands and returns the output
+def calc(operator, operand1, operand2):
+    """Returns result of mathematical operation"""
+    if operator == '+':
+        return operand1 + operand2
+    elif operator == '-':
+        return operand1 - operand2
+    elif operator == '*':
+        return operand1 * operand2
+    elif operator == '/':
+        return operand1 / operand2
+    elif operator == '%':
+        return operand1 % operand2
+    elif operator == '**':
+        return operand1 ** operand2
+    else:
+        raise ValueError(f"Operator {operator} not supported.")
 
 def stream_conversation(user_message):
     """
@@ -59,7 +99,8 @@ def stream_conversation(user_message):
     additional_model_fields = {"top_k": top_k}
     model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 
-    system_prompts = [{"text": "You are a helpful assistant."}]
+    system_prompts = [{"text": "You are a helpful assistant."
+                                "If you have to do a mathematical calculation, you must do it using the tools provided."}]
     
     user_message_dict = {
         "role": "user",
@@ -130,66 +171,76 @@ def stream_conversation(user_message):
                                     "content": [{"text": str(err)}],
                                     "status": 'error'
                                 }
+                        elif tool['name'] == 'calc':
+                            
+                            result = calc(tool['input']['operator'], tool['input']['operand1'], tool['input']['operand2'])
+                            tool_result = {
+                                "toolUseId": tool['toolUseId'],
+                                "content": [{"json": {"result": result}}]
+                            }
 
-                            tool_result_message = {
+                        else:
+                            raise ValueError(f"Tool {tool['name']} not supported.")
+                        
+                        tool_result_message = {
                                 "role": "user",
                                 "content": [{"toolResult": tool_result}]
-                            }
-                            messages.append(tool_result_message)
+                        }
+                        messages.append(tool_result_message)
 
-                            # Resend the messages including the tool result
-                            response = bedrock.converse_stream(
-                                modelId=model_id,
-                                messages=messages,
-                                system=system_prompts,
-                                inferenceConfig=inference_config,
-                                additionalModelRequestFields=additional_model_fields,
-                                toolConfig=tool_config
-                            )
+                        # Resend the messages including the tool result
+                        response = bedrock.converse_stream(
+                            modelId=model_id,
+                            messages=messages,
+                            system=system_prompts,
+                            inferenceConfig=inference_config,
+                            additionalModelRequestFields=additional_model_fields,
+                            toolConfig=tool_config
+                        )
 
-                            # for chunk in response['stream']:
-                            #     if 'contentBlockDelta' in chunk:
-                            #         delta = chunk['contentBlockDelta']['delta']
-                            #         if 'text' in delta:
-                            #             yield delta['text']
-                            #             text += delta['text']
-                            
-                            
-                            tool_use = {}
-                            text = ""
-                            content = []
-                                        
-                            for chunk in response['stream']:
-                                print("Chunk received:", chunk)  # Debug log to trace events
+                        # for chunk in response['stream']:
+                        #     if 'contentBlockDelta' in chunk:
+                        #         delta = chunk['contentBlockDelta']['delta']
+                        #         if 'text' in delta:
+                        #             yield delta['text']
+                        #             text += delta['text']
+                        
+                        
+                        tool_use = {}
+                        text = ""
+                        content = []
+                                    
+                        for chunk in response['stream']:
+                            print("Chunk received:", chunk)  # Debug log to trace events
 
-                                if 'messageStart' in chunk:
-                                    message = {'role': chunk['messageStart']['role']}
-                                elif 'contentBlockStart' in chunk:
-                                    if 'toolUse' in chunk['contentBlockStart']['start']:
-                                        tool = chunk['contentBlockStart']['start']['toolUse']
-                                        tool_use['toolUseId'] = tool['toolUseId']
-                                        tool_use['name'] = tool['name']
-                                elif 'contentBlockDelta' in chunk:
-                                    delta = chunk['contentBlockDelta']['delta']
-                                    if 'toolUse' in delta:
-                                        if 'input' not in tool_use:
-                                            tool_use['input'] = ''
-                                        tool_use['input'] += delta['toolUse']['input']
-                                    elif 'text' in delta:
-                                        text += delta['text']
-                                        yield delta['text']
-                                elif 'contentBlockStop' in chunk:
-                                    if 'input' in tool_use:
-                                        tool_use['input'] = json.loads(tool_use['input'])
-                                        content.append({'toolUse': tool_use})
-                                        tool_use = {}
-                                    else:
-                                        content.append({'text': text})
-                                        text = ''
-                                elif 'messageStop' in chunk:
-                                    stop_reason = chunk['messageStop']['stopReason']
-                                    assistant_message = {'role': 'assistant', 'content': content}
-                                    messages.append(assistant_message)
+                            if 'messageStart' in chunk:
+                                message = {'role': chunk['messageStart']['role']}
+                            elif 'contentBlockStart' in chunk:
+                                if 'toolUse' in chunk['contentBlockStart']['start']:
+                                    tool = chunk['contentBlockStart']['start']['toolUse']
+                                    tool_use['toolUseId'] = tool['toolUseId']
+                                    tool_use['name'] = tool['name']
+                            elif 'contentBlockDelta' in chunk:
+                                delta = chunk['contentBlockDelta']['delta']
+                                if 'toolUse' in delta:
+                                    if 'input' not in tool_use:
+                                        tool_use['input'] = ''
+                                    tool_use['input'] += delta['toolUse']['input']
+                                elif 'text' in delta:
+                                    text += delta['text']
+                                    yield delta['text']
+                            elif 'contentBlockStop' in chunk:
+                                if 'input' in tool_use:
+                                    tool_use['input'] = json.loads(tool_use['input'])
+                                    content.append({'toolUse': tool_use})
+                                    tool_use = {}
+                                else:
+                                    content.append({'text': text})
+                                    text = ''
+                            elif 'messageStop' in chunk:
+                                stop_reason = chunk['messageStop']['stopReason']
+                                assistant_message = {'role': 'assistant', 'content': content}
+                                messages.append(assistant_message)
 
             break
 

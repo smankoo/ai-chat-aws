@@ -83,6 +83,7 @@ def calc(operator, operand1, operand2):
         return operand1 ** operand2
     else:
         raise ValueError(f"Operator {operator} not supported.")
+    
 
 def stream_conversation(user_message):
     """
@@ -99,8 +100,7 @@ def stream_conversation(user_message):
     additional_model_fields = {"top_k": top_k}
     model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 
-    system_prompts = [{"text": "You are a helpful assistant."
-                                "If you have to do a mathematical calculation, you must do it using the tools provided."}]
+    system_prompts = [{"text": "You are a helpful assistant."}]
     
     user_message_dict = {
         "role": "user",
@@ -109,151 +109,109 @@ def stream_conversation(user_message):
     
     messages.append(user_message_dict)
 
-    response = bedrock.converse_stream(
-        modelId=model_id,
-        messages=messages,
-        system=system_prompts,
-        inferenceConfig=inference_config,
-        additionalModelRequestFields=additional_model_fields,
-        toolConfig=tool_config
-    )
+    stop_reason = ''
+    
+    while not stop_reason in ['stop_sequence', 'end_turn']:
+        response = bedrock.converse_stream(
+            modelId=model_id,
+            messages=messages,
+            system=system_prompts,
+            inferenceConfig=inference_config,
+            additionalModelRequestFields=additional_model_fields,
+            toolConfig=tool_config
+        )
 
-    tool_use = {}
-    text = ""
-    content = []
+        tool_use = {}
+        text = ""
+        content = []
+        stop_reason = None
+        assistant_message = None
+        
+        for chunk in response['stream']:
+            # print("Chunk received:", chunk)  # Debug log to trace events
 
-    for chunk in response['stream']:
-        print("Chunk received:", chunk)  # Debug log to trace events
+            if 'messageStart' in chunk:
+                message = {'role': chunk['messageStart']['role']}
+            elif 'contentBlockStart' in chunk:
+                if 'toolUse' in chunk['contentBlockStart']['start']:
+                    tool = chunk['contentBlockStart']['start']['toolUse']
+                    tool_use['toolUseId'] = tool['toolUseId']
+                    tool_use['name'] = tool['name']
+            elif 'contentBlockDelta' in chunk:
+                delta = chunk['contentBlockDelta']['delta']
+                if 'toolUse' in delta:
+                    if 'input' not in tool_use:
+                        tool_use['input'] = ''
+                    tool_use['input'] += delta['toolUse']['input']
+                elif 'text' in delta:
+                    text += delta['text']
+                    
+                    if not __name__ == '__main__':
+                        print(delta['text'], end='')
+                    
+                    yield delta['text']
+            elif 'contentBlockStop' in chunk:
+                if 'input' in tool_use:
+                    tool_use['input'] = json.loads(tool_use['input'])
+                    content.append({'toolUse': tool_use})
+                    tool_use = {}
+                else:
+                    content.append({'text': text})
+                    text = ''
+            elif 'messageStop' in chunk:
+                stop_reason = chunk['messageStop']['stopReason']
+                assistant_message = {'role': 'assistant', 'content': content}
+                messages.append(assistant_message)
 
-        if 'messageStart' in chunk:
-            message = {'role': chunk['messageStart']['role']}
-        elif 'contentBlockStart' in chunk:
-            if 'toolUse' in chunk['contentBlockStart']['start']:
-                tool = chunk['contentBlockStart']['start']['toolUse']
-                tool_use['toolUseId'] = tool['toolUseId']
-                tool_use['name'] = tool['name']
-        elif 'contentBlockDelta' in chunk:
-            delta = chunk['contentBlockDelta']['delta']
-            if 'toolUse' in delta:
-                if 'input' not in tool_use:
-                    tool_use['input'] = ''
-                tool_use['input'] += delta['toolUse']['input']
-            elif 'text' in delta:
-                text += delta['text']
-                yield delta['text']
-        elif 'contentBlockStop' in chunk:
-            if 'input' in tool_use:
-                tool_use['input'] = json.loads(tool_use['input'])
-                content.append({'toolUse': tool_use})
-                tool_use = {}
-            else:
-                content.append({'text': text})
-                text = ''
-        elif 'messageStop' in chunk:
-            stop_reason = chunk['messageStop']['stopReason']
-            assistant_message = {'role': 'assistant', 'content': content}
-            messages.append(assistant_message)
+                # Print token usage and latency
+                metadata = {}
+                
+                if 'metadata' in chunk:
+                    metadata = chunk['metadata']
+                if 'usage' in metadata:
+                    print("\nToken usage")
+                    print(f"Input tokens: {metadata['usage']['inputTokens']}")
+                    print(f"Output tokens: {metadata['usage']['outputTokens']}")
+                    print(f"Total tokens: {metadata['usage']['totalTokens']}")
+                if 'metrics' in metadata:
+                    print(f"Latency: {metadata['metrics']['latencyMs']} milliseconds")
+        
 
-            if stop_reason == "tool_use":
-                for content_block in content:
-                    if 'toolUse' in content_block:
-                        tool = content_block['toolUse']
-                        if tool['name'] == 'top_song':
-                            try:
-                                song, artist = get_top_song(tool['input']['sign'])
+                if stop_reason == "tool_use":
+                    for content_block in content:
+                        if 'toolUse' in content_block:
+                            tool = content_block['toolUse']
+                            if tool['name'] == 'top_song':
+                                try:
+                                    song, artist = get_top_song(tool['input']['sign'])
+                                    tool_result = {
+                                        "toolUseId": tool['toolUseId'],
+                                        "content": [{"json": {"song": song, "artist": artist}}]
+                                    }
+                                except ValueError as err:
+                                    tool_result = {
+                                        "toolUseId": tool['toolUseId'],
+                                        "content": [{"text": str(err)}],
+                                        "status": 'error'
+                                    }
+                            elif tool['name'] == 'calc':
+                                
+                                result = calc(tool['input']['operator'], tool['input']['operand1'], tool['input']['operand2'])
                                 tool_result = {
                                     "toolUseId": tool['toolUseId'],
-                                    "content": [{"json": {"song": song, "artist": artist}}]
+                                    "content": [{"json": {"result": result}}]
                                 }
-                            except ValueError as err:
-                                tool_result = {
-                                    "toolUseId": tool['toolUseId'],
-                                    "content": [{"text": str(err)}],
-                                    "status": 'error'
-                                }
-                        elif tool['name'] == 'calc':
+
+                            else:
+                                raise ValueError(f"Tool {tool['name']} not supported.")
                             
-                            result = calc(tool['input']['operator'], tool['input']['operand1'], tool['input']['operand2'])
-                            tool_result = {
-                                "toolUseId": tool['toolUseId'],
-                                "content": [{"json": {"result": result}}]
+                            tool_result_message = {
+                                    "role": "user",
+                                    "content": [{"toolResult": tool_result}]
                             }
+                            messages.append(tool_result_message)
 
-                        else:
-                            raise ValueError(f"Tool {tool['name']} not supported.")
-                        
-                        tool_result_message = {
-                                "role": "user",
-                                "content": [{"toolResult": tool_result}]
-                        }
-                        messages.append(tool_result_message)
-
-                        # Resend the messages including the tool result
-                        response = bedrock.converse_stream(
-                            modelId=model_id,
-                            messages=messages,
-                            system=system_prompts,
-                            inferenceConfig=inference_config,
-                            additionalModelRequestFields=additional_model_fields,
-                            toolConfig=tool_config
-                        )
-
-                        # for chunk in response['stream']:
-                        #     if 'contentBlockDelta' in chunk:
-                        #         delta = chunk['contentBlockDelta']['delta']
-                        #         if 'text' in delta:
-                        #             yield delta['text']
-                        #             text += delta['text']
-                        
-                        
-                        tool_use = {}
-                        text = ""
-                        content = []
-                                    
-                        for chunk in response['stream']:
-                            print("Chunk received:", chunk)  # Debug log to trace events
-
-                            if 'messageStart' in chunk:
-                                message = {'role': chunk['messageStart']['role']}
-                            elif 'contentBlockStart' in chunk:
-                                if 'toolUse' in chunk['contentBlockStart']['start']:
-                                    tool = chunk['contentBlockStart']['start']['toolUse']
-                                    tool_use['toolUseId'] = tool['toolUseId']
-                                    tool_use['name'] = tool['name']
-                            elif 'contentBlockDelta' in chunk:
-                                delta = chunk['contentBlockDelta']['delta']
-                                if 'toolUse' in delta:
-                                    if 'input' not in tool_use:
-                                        tool_use['input'] = ''
-                                    tool_use['input'] += delta['toolUse']['input']
-                                elif 'text' in delta:
-                                    text += delta['text']
-                                    yield delta['text']
-                            elif 'contentBlockStop' in chunk:
-                                if 'input' in tool_use:
-                                    tool_use['input'] = json.loads(tool_use['input'])
-                                    content.append({'toolUse': tool_use})
-                                    tool_use = {}
-                                else:
-                                    content.append({'text': text})
-                                    text = ''
-                            elif 'messageStop' in chunk:
-                                stop_reason = chunk['messageStop']['stopReason']
-                                assistant_message = {'role': 'assistant', 'content': content}
-                                messages.append(assistant_message)
-
-            break
-
-        if 'metadata' in chunk:
-            metadata = chunk['metadata']
-            if 'usage' in metadata:
-                print("\nToken usage")
-                print(f"Input tokens: {metadata['usage']['inputTokens']}")
-                print(f"Output tokens: {metadata['usage']['outputTokens']}")
-                print(f"Total tokens: {metadata['usage']['totalTokens']}")
-            if 'metrics' in metadata:
-                print(f"Latency: {metadata['metrics']['latencyMs']} milliseconds")
-
+       
 if __name__ == "__main__":
     for chunk in stream_conversation("What is the most popular song on WZPZ?"):
-        print(chunk)
+        print(chunk,  end="")
